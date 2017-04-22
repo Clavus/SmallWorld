@@ -898,6 +898,9 @@ namespace VRTK
             if (index < uint.MaxValue)
             {
                 var device = GetTrackedObject(GetControllerByIndex(index));
+                if (device == null)
+                    return;
+
                 previousControllerRotations[index] = currentControllerRotations[index];
                 currentControllerRotations[index] = device.transform.rotation;
 
