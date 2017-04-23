@@ -9,6 +9,7 @@ public class Lemming : VRTK_InteractableObject
     [Header("Lemming")]
     [SerializeField] private NavMeshAgent agent;
     [SerializeField] private Animator animator;
+    [SerializeField] private Healthbar healthbar;
     [SerializeField] Behaviour startBehaviour;
     [SerializeField] GameObject[] lemmingBodyTypes;
 
@@ -42,7 +43,7 @@ public class Lemming : VRTK_InteractableObject
 
     public enum Behaviour
     {
-        Wander, Grabbed, Falling
+        Wander, Grabbed, Falling, Turret, Dead
     }
     
 	void Start ()
@@ -50,6 +51,9 @@ public class Lemming : VRTK_InteractableObject
         geometryLayer = LayerMask.NameToLayer("Geometry");
         SetBehaviour(startBehaviour);
         StartCoroutine(AnimatorUpdate());
+
+        healthbar.SetHealth(1);
+        healthbar.Hide();
 
         // pick random lemming body
         int keep = Random.Range(0, lemmingBodyTypes.Length);
@@ -61,6 +65,18 @@ public class Lemming : VRTK_InteractableObject
                 lemmingBodyTypes[i].SetActive(true);
         }
 
+    }
+
+    public override void StartTouching(GameObject currentTouchingObject)
+    {
+        base.StartTouching(currentTouchingObject);
+        healthbar.Show();
+    }
+
+    public override void StopTouching(GameObject previousTouchingObject)
+    {
+        base.StopTouching(previousTouchingObject);
+        healthbar.Hide();
     }
 
     public override void Grabbed(GameObject grabbingObject)
@@ -86,6 +102,7 @@ public class Lemming : VRTK_InteractableObject
 
         activeRoutine = null;
         currentBehaviour = behaviour;
+        animator.SetInteger(PARAM_ANIMATION, 0);
 
         switch (behaviour)
         {
@@ -104,6 +121,14 @@ public class Lemming : VRTK_InteractableObject
                 foreach (MonoBehaviour m in fallSettings.disableOnFall)
                     m.enabled = false;
                 break;
+            case Behaviour.Turret:
+                animator.SetInteger(PARAM_ANIMATION, 1);
+                break;
+            case Behaviour.Dead:
+                agent.enabled = false;
+                animator.SetBool(PARAM_DEATH, true);
+                animator.SetInteger(PARAM_DEATHTYPE, Random.Range(1,3));
+                break;
         }
 
         if (activeRoutine != null)
@@ -112,7 +137,7 @@ public class Lemming : VRTK_InteractableObject
 
     void OnCollisionEnter(Collision collision)
     {
-        if (currentBehaviour == Behaviour.Falling && (collision.gameObject.layer & geometryLayer) > 0)
+        if (currentBehaviour == Behaviour.Falling && (collision.gameObject.layer & geometryLayer) > 0 && Vector3.Dot(collision.contacts[0].normal, Vector3.up) > 0.5f )
         {
             foreach (MonoBehaviour m in fallSettings.enableOnLand)
                 m.enabled = true;

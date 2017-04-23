@@ -223,7 +223,7 @@ namespace VRTK.GrabAttachMechanics
                         objectRigidbody.velocity = velocity * (grabbingObjectThrowMultiplier * throwMultiplier);
                         objectRigidbody.angularVelocity = angularVelocity;
                     }
-
+                    
                     if (throwVelocityWithAttachDistance)
                     {
                         var rigidbodyCollider = objectRigidbody.GetComponentInChildren<Collider>();
