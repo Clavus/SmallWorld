@@ -4,18 +4,26 @@ using UnityEngine;
 using UnityEngine.AI;
 using VRTK;
 
-public class Lemming : VRTK_InteractableObject
+public class Lemming : VRTK_InteractableObject, IDamagable
 {
     [Header("Lemming")]
     [SerializeField] private NavMeshAgent agent;
     [SerializeField] private Animator animator;
     [SerializeField] private Healthbar healthbar;
+    [SerializeField] private Rigidbody body;
+    [SerializeField] private Collider collider;
     [SerializeField] Behaviour startBehaviour;
     [SerializeField] GameObject[] lemmingBodyTypes;
 
+    [Range(0, 100)]
+    public float maxHealth = 100;
+    [Range(0, 100)]
+    public float health = 100;
+    
     public WanderSettings wanderSettings;
     public GrabSettings grabSettings;
     public FallSettings fallSettings;
+    public WaterSettings waterSettings;
 
     private readonly int PARAM_SPEED = Animator.StringToHash("Speed_f");
     private readonly int PARAM_GROUNDED = Animator.StringToHash("Grounded");
@@ -33,7 +41,12 @@ public class Lemming : VRTK_InteractableObject
     private Vector3 lastPosition;
     private IEnumerator activeRoutine = null;
     private const float animatorUpdateInterval = 0.1f;
+    private float bodyDrag = 0;
+    private float waterLevel = 0;
     private int geometryLayer;
+    private int waterLayer;
+    private MissileLauncher mountedTurret;
+    private bool hideHealthbarAfterTouch = true;
 
     void Reset()
     {
@@ -43,17 +56,20 @@ public class Lemming : VRTK_InteractableObject
 
     public enum Behaviour
     {
-        Wander, Grabbed, Falling, Turret, Dead
+        Wander, Grabbed, Falling, Turret, Dead, Drowning
     }
     
 	void Start ()
     {
         geometryLayer = LayerMask.NameToLayer("Geometry");
+        waterLayer = LayerMask.NameToLayer("Water");
         SetBehaviour(startBehaviour);
         StartCoroutine(AnimatorUpdate());
 
         healthbar.SetHealth(1);
         healthbar.Hide();
+
+        bodyDrag = body.drag;
 
         // pick random lemming body
         int keep = Random.Range(0, lemmingBodyTypes.Length);
@@ -67,16 +83,30 @@ public class Lemming : VRTK_InteractableObject
 
     }
 
+    void FixedUpdate()
+    {
+        if (currentBehaviour == Behaviour.Drowning)
+        {
+            float diff = waterLevel - transform.position.y;
+            if (diff > 0)
+                body.AddForce(Vector3.up * diff * 8, ForceMode.Acceleration);
+        }
+    }
+
     public override void StartTouching(GameObject currentTouchingObject)
     {
         base.StartTouching(currentTouchingObject);
-        healthbar.Show();
+
+        if (currentBehaviour != Behaviour.Dead)
+            healthbar.Show();
     }
 
     public override void StopTouching(GameObject previousTouchingObject)
     {
         base.StopTouching(previousTouchingObject);
-        healthbar.Hide();
+
+        if (currentBehaviour != Behaviour.Dead && hideHealthbarAfterTouch)
+            healthbar.Hide();
     }
 
     public override void Grabbed(GameObject grabbingObject)
@@ -91,8 +121,49 @@ public class Lemming : VRTK_InteractableObject
 
         foreach (MonoBehaviour m in grabSettings.enableOnDrop)
             m.enabled = true;
-        
-        SetBehaviour(Behaviour.Falling);
+
+        Damage(25);
+        SetBehaviour(health > 0 ? Behaviour.Falling : Behaviour.Dead);
+    }
+
+    public void Damage(float amount)
+    {
+        if (currentBehaviour == Behaviour.Dead)
+            return;
+
+        health = Mathf.Clamp(health - amount, 0, maxHealth);
+        healthbar.SetHealth(health / maxHealth);
+        healthbar.Show();
+        StartCoroutine(HideHealthbarAfterSeconds(3));
+
+        if (health <= 0)
+            SetBehaviour(Behaviour.Dead);
+    }
+
+    public void Heal(float amount)
+    {
+        if (health >= maxHealth)
+            return;
+
+        health = Mathf.Clamp(health + amount, 0, maxHealth);
+
+        healthbar.SetHealth(health / maxHealth);
+        healthbar.Show();
+        StartCoroutine(HideHealthbarAfterSeconds(2));
+
+        if (health >= maxHealth && currentBehaviour == Behaviour.Dead)
+        {
+            animator.SetBool(PARAM_DEATH, false);
+            SetBehaviour(Behaviour.Wander);
+        }
+    }
+
+    IEnumerator HideHealthbarAfterSeconds(float secs)
+    {
+        hideHealthbarAfterTouch = false;
+        yield return new WaitForSeconds(secs);
+        healthbar.Hide();
+        hideHealthbarAfterTouch = true;
     }
 
     public void SetBehaviour(Behaviour behaviour)
@@ -103,6 +174,14 @@ public class Lemming : VRTK_InteractableObject
         activeRoutine = null;
         currentBehaviour = behaviour;
         animator.SetInteger(PARAM_ANIMATION, 0);
+
+        if (behaviour != Behaviour.Turret && mountedTurret != null)
+        {
+            mountedTurret.Dismount(this);
+            mountedTurret = null;
+        }
+
+        body.drag = bodyDrag;
 
         switch (behaviour)
         {
@@ -122,12 +201,20 @@ public class Lemming : VRTK_InteractableObject
                     m.enabled = false;
                 break;
             case Behaviour.Turret:
+                agent.SetDestination(mountedTurret.mountLocation.position);
                 animator.SetInteger(PARAM_ANIMATION, 1);
+                break;
+            case Behaviour.Drowning:
+                agent.enabled = false;
+                body.drag = waterSettings.waterDrag;
+                animator.SetBool(PARAM_GROUNDED, false);
+                foreach (MonoBehaviour m in fallSettings.enableOnLand)
+                    m.enabled = true;
                 break;
             case Behaviour.Dead:
                 agent.enabled = false;
+                animator.SetInteger(PARAM_DEATHTYPE, Random.Range(1, 3));
                 animator.SetBool(PARAM_DEATH, true);
-                animator.SetInteger(PARAM_DEATHTYPE, Random.Range(1,3));
                 break;
         }
 
@@ -135,16 +222,68 @@ public class Lemming : VRTK_InteractableObject
             StartCoroutine(activeRoutine);
     }
 
+    public bool CanMount()
+    {
+        return currentBehaviour == Behaviour.Wander;
+    }
+
+    public void Mount(MissileLauncher launcher)
+    {
+        mountedTurret = launcher;
+        SetBehaviour(Behaviour.Turret);
+    }
+
     void OnCollisionEnter(Collision collision)
     {
-        if (currentBehaviour == Behaviour.Falling && (collision.gameObject.layer & geometryLayer) > 0 && Vector3.Dot(collision.contacts[0].normal, Vector3.up) > 0.5f )
+        if (IsGrabbed())
+            return;
+
+        int layer = collision.gameObject.layer;
+        if ((currentBehaviour == Behaviour.Falling || currentBehaviour == Behaviour.Dead) && (layer & geometryLayer) > 0 && Vector3.Dot(collision.contacts[0].normal, Vector3.up) > 0.5f )
         {
             foreach (MonoBehaviour m in fallSettings.enableOnLand)
                 m.enabled = true;
 
             animator.SetBool(PARAM_GROUNDED, true);
-            SetBehaviour(Behaviour.Wander);
+
+            if (currentBehaviour == Behaviour.Falling)
+                SetBehaviour(Behaviour.Wander);
         }
+        
+    }
+
+    void OnWaterEnter()
+    {
+        if (IsGrabbed())
+            return;
+
+        if (currentBehaviour == Behaviour.Dead)
+        {
+            collider.enabled = false; // dead person fell into the water, is now lost
+            StartCoroutine(RemoveMeAfterDelay(5));
+        }
+        else
+        {
+            foreach (MonoBehaviour m in waterSettings.enableOnWater)
+                m.enabled = true;
+
+            foreach (MonoBehaviour m in waterSettings.disableOnWater)
+                m.enabled = false;
+
+            waterLevel = transform.position.y;
+            SetBehaviour(Behaviour.Drowning);
+        }
+    }
+
+    void OnWaterLeave()
+    {
+        
+    }
+
+    IEnumerator RemoveMeAfterDelay(float delay)
+    {
+        yield return new WaitForSeconds(delay);
+        Destroy(gameObject);
     }
 
     IEnumerator AnimatorUpdate()
@@ -191,4 +330,12 @@ public class FallSettings
 {
     public MonoBehaviour[] disableOnFall;
     public MonoBehaviour[] enableOnLand;
+}
+
+[System.Serializable]
+public class WaterSettings
+{
+    public float waterDrag = 5f;
+    public MonoBehaviour[] disableOnWater;
+    public MonoBehaviour[] enableOnWater;
 }

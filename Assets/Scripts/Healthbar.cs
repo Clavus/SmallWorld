@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using DG.Tweening;
 
 public class Healthbar : MonoBehaviour
 {
@@ -8,17 +9,26 @@ public class Healthbar : MonoBehaviour
     [SerializeField] private Renderer barRenderer;
     [SerializeField] private GameObject background;
     public Gradient healthColor;
-    
+
     private float baseScale = 0;
+    private float currentFrac = 1;
+    private float targetFrac = 1;
+    private Vector3 cachedScale = Vector3.zero;
 
     void Awake()
     {
         baseScale = bar.transform.localScale.x;
+        cachedScale = bar.transform.localScale;
+        UpdateBar();
     }
-
-    void Start()
+    
+    void Update()
     {
-        SetHealth(1);
+        if (targetFrac != currentFrac)
+        {
+            currentFrac = Mathf.MoveTowards(currentFrac, targetFrac, Time.deltaTime * 0.5f);
+            UpdateBar();
+        }
     }
 
     public void Hide()
@@ -35,8 +45,14 @@ public class Healthbar : MonoBehaviour
 
     public void SetHealth(float frac)
     {
-        bar.transform.localScale.Set(frac * baseScale, 1, 1);
-        barRenderer.material.color = healthColor.Evaluate(frac);
+        targetFrac = frac;
+    }
+
+    private void UpdateBar()
+    {
+        cachedScale.x = currentFrac * baseScale;
+        bar.transform.localScale = cachedScale;
+        barRenderer.material.color = healthColor.Evaluate(currentFrac);
     }
     
 }
